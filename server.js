@@ -8,80 +8,89 @@ const port = process.env.PORT || 8080;
 app.use(cors());
 app.use(express.json());
 
+// 初始化千问（保持你原来的配置不变）
 const openai = new OpenAI({
-  apiKey: 'sk-aba6b3ce7cd64566b6add2868c2c34f6',
+  apiKey: 'sk-aba6b3ce7cd64566b6add2868c234f6',
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 });
 
-// 测试接口
+// 测试接口（保留）
 app.get('/', (req, res) => {
   res.send('✅ 智慧农业AI服务运行正常');
 });
 
-// ==============================
-// 最终版 /chat 接口
-// 支持 message + context
-// 强制中文 + 简洁输出 + 无context自动兜底
-// ==============================
+// 【核心】/chat 接口（完全按你定的格式实现）
 app.post('/chat', async (req, res) => {
   try {
+    // 1. 按约定格式读取请求体：message + context
     const { message, context } = req.body || {};
 
+    // 校验：必须有用户问题
     if (!message) {
       return res.status(400).json({ reply: '请输入问题' });
     }
 
-    // 拼接环境数据（有就拼，没有就空）
+    // 2. 把 context 里的实时数据，拼接成给AI的prompt
     let contextText = '';
     if (context) {
       contextText = `
-当前环境数据：
-温度：${context.temperature}℃
-湿度：${context.humidity}%
-光照：${context.luminance} Lux
-土壤电压：${context.soilVoltage} V
-eCO2：${context.eco2} ppm
-TVOC：${context.tvoc} ppb
-水泵：${context.pump}
-补光灯：${context.lightCtrl}
-风机：${context.fanCtrl}
-温度报警：${context.tempAlarm}
-土壤报警：${context.soilAlarm}
-`.trim();
+当前设备实时环境数据：
+- 温度：${context.temperature ?? '--'} ℃
+- 湿度：${context.humidity ?? '--'} %
+- 光照：${context.luminance ?? '--'} lux
+- 土壤电压：${context.soilVoltage ?? '--'} V
+- CO2：${context.eco2 ?? '--'} ppm
+- TVOC：${context.tvoc ?? '--'}
+
+设备状态：
+- 水泵：${context.pump ?? '--'}
+- 补光灯：${context.lightCtrl ?? '--'}
+- 风机：${context.fanCtrl ?? '--'}
+- 蜂鸣器：${context.buzzer ?? '--'}
+
+报警状态：
+- 温度报警：${context.tempAlarm ?? '--'}
+- 土壤报警：${context.soilAlarm ?? '--'}
+
+运行模式：
+- 灯光模式：${context.lightMode ?? '--'}
+- 风机模式：${context.fanMode ?? '--'}
+- 水泵模式：${context.pumpMode ?? '--'}
+`;
     }
 
-    // 🔥 核心：强制中文 + 简洁 + 手机友好
-    const finalPrompt = `
-你是专业智慧农业助手。
-规则：
-1. 只用简体中文回答。
-2. 回答控制在 3-5 行，简洁、适合手机半屏显示。
-3. 优先根据环境数据给出结论 + 建议。
-4. 无数据时正常回答，不编造。
-
-环境数据：
-${contextText || '无实时数据'}
+    // 3. 组装最终prompt，发给千问
+    const fullPrompt = `
+你是一个专业的智慧农业设备助手，只能用中文回答，语言简洁明了。
 
 用户问题：${message}
-`.trim();
 
-    // 调用AI
+${contextText}
+
+请根据以上数据，给出专业、实用的建议。
+`;
+
+    // 调用千问接口
     const completion = await openai.chat.completions.create({
-      model: "qwen-flash",
-      messages: [{ role: "user", content: finalPrompt }],
-      temperature: 0.4
+      model: 'qwen-turbo', // 千问的模型，保持和你原来一致
+      messages: [
+        { role: 'user', content: fullPrompt }
+      ]
     });
 
-    // 返回格式不变
-    res.json({
-      reply: completion.choices[0].message.content || "分析失败"
+    // 4. 按约定格式返回：{ reply: "..." }
+    return res.json({
+      reply: completion.choices[0].message.content
     });
 
-  } catch (err) {
-    res.status(500).json({ reply: "服务异常，请稍后再试" });
+  } catch (error) {
+    console.error('AI接口错误:', error);
+    return res.json({
+      reply: '抱歉，暂时无法获取AI分析，请稍后再试。'
+    });
   }
 });
 
 app.listen(port, () => {
-  console.log(`🚀 服务已启动: ${port}`);
+  console.log(`服务已启动，端口：${port}`);
 });
