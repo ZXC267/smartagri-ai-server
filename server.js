@@ -11,9 +11,9 @@ const port = process.env.PORT || 8080;
 app.use(cors());
 app.use(express.json());
 
-// 🔥 关键修复：强制使用正确的 API Key，不依赖环境变量
+// 从环境变量读取 API Key（Railway 里配置）
 const openai = new OpenAI({
-  apiKey: 'sk-aba6b3ce7cd64566b6add2868c234f6', // 写死你的真实密钥
+  apiKey: 'sk-aba6b3ce7cd64566b6add2868c2c34f6',
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 });
 
@@ -36,7 +36,7 @@ app.post('/chat', async (req, res) => {
         try {
           parsedContext = JSON.parse(context);
         } catch (e) {
-          console.error('❌ context JSON 解析失败:', e);
+          console.error('context JSON 解析失败:', e);
           parsedContext = {};
         }
       } else {
@@ -83,31 +83,25 @@ ${contextText}
 请根据以上数据，给出专业、实用的建议。
 `;
 
-    // 🔥 主要修复：增加详细错误捕获
-    try {
-      const completion = await openai.chat.completions.create({
-        model: 'qwen-turbo',
-        messages: [{ role: 'user', content: fullPrompt }]
-      });
+    // 调用千问
+    const completion = await openai.chat.completions.create({
+      model: 'qwen-turbo',
+      messages: [{ role: 'user', content: fullPrompt }]
+    });
 
-      return res.json({
-        reply: completion.choices[0].message.content
-      });
-    } catch (aiError) {
-      console.error('❌ 千问 AI 调用失败:', aiError.response?.data || aiError.message);
-      return res.json({
-        reply: 'AI 服务调用失败，请检查密钥或网络连接。" + (aiError.response?.data?.message || "")'
-      });
-    }
+    return res.json({
+      reply: completion.choices[0].message.content
+    });
 
   } catch (error) {
-    console.error('❌ 服务器内部错误:', error);
+    console.error('服务错误:', error);
+    // 修复：只返回正常提示，不暴露代码
     return res.json({
-      reply: '服务器内部错误，请稍后再试。'
+      reply: 'AI 服务调用失败，请检查配置或稍后再试。'
     });
   }
 });
 
 app.listen(port, () => {
-  console.log(`🚀 服务已启动，端口：${port}`);
+  console.log(`服务已启动，端口：${port}`);
 });
