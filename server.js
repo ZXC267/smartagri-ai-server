@@ -1,19 +1,16 @@
 import express from 'express';
 import cors from 'cors';
 import { OpenAI } from 'openai';
-import dotenv from 'dotenv';
 
-dotenv.config();
 const app = express();
 const port = process.env.PORT || 8080;
 
-// 基础配置
 app.use(cors());
 app.use(express.json());
 
-// 初始化通义千问
+// 🔥 直接在这里写死 API Key，不用管环境变量了 🔥
 const openai = new OpenAI({
-  apiKey: process.env.DASHSCOPE_API_KEY,
+  apiKey: 'sk-aba6b3ce7cd64566b6add2868c2c34f6', // <--- 在这里填入你的 Key
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 });
 
@@ -29,7 +26,7 @@ app.post('/chat', async (req, res) => {
     if (!message) return res.status(400).json({ error: "Message required" });
 
     const completion = await openai.chat.completions.create({
-      model: process.env.MODEL_NAME || "qwen-flash",
+      model: 'qwen-flash',
       messages: [{ role: "user", content: message }]
     });
 
