@@ -8,28 +8,30 @@ const port = process.env.PORT || 8080;
 app.use(cors());
 app.use(express.json());
 
-// 🔥 直接在这里写死 API Key，不用管环境变量了
 const openai = new OpenAI({
-  apiKey: 'sk-aba6b3ce7cd64566b6add2868c2c34f6', // <--- 这里填入你的 Key
+  apiKey: 'sk-aba6b3ce7cd64566b6add2868c2c34f6',
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 });
 
-// 测试路由
+// 测试接口
 app.get('/', (req, res) => {
-  res.send('✅ Server is running!');
+  res.send('✅ 智慧农业AI服务运行正常');
 });
 
-// 👇 这里是你要的【支持 message + context】的新版 /chat 接口
+// ==============================
+// 最终版 /chat 接口
+// 支持 message + context
+// 强制中文 + 简洁输出 + 无context自动兜底
+// ==============================
 app.post('/chat', async (req, res) => {
   try {
-    // 1. 同时读取 message 和 context
     const { message, context } = req.body || {};
 
     if (!message) {
-      return res.status(400).json({ reply: '缺少 message 参数' });
+      return res.status(400).json({ reply: '请输入问题' });
     }
 
-    // 2. 把 context 拼成文字
+    // 拼接环境数据（有就拼，没有就空）
     let contextText = '';
     if (context) {
       contextText = `
@@ -43,43 +45,43 @@ TVOC：${context.tvoc} ppb
 水泵：${context.pump}
 补光灯：${context.lightCtrl}
 风机：${context.fanCtrl}
-蜂鸣器：${context.buzzer}
 温度报警：${context.tempAlarm}
 土壤报警：${context.soilAlarm}
-补光模式：${context.lightMode}
-风机模式：${context.fanMode}
-水泵模式：${context.pumpMode}
 `.trim();
     }
 
-    // 3. 组合最终提示词
+    // 🔥 核心：强制中文 + 简洁 + 手机友好
     const finalPrompt = `
-你是专业的智慧农业助手，请结合当前环境数据回答用户问题。
-回答要求简洁、专业、可执行。
+你是专业智慧农业助手。
+规则：
+1. 只用简体中文回答。
+2. 回答控制在 3-5 行，简洁、适合手机半屏显示。
+3. 优先根据环境数据给出结论 + 建议。
+4. 无数据时正常回答，不编造。
 
-${contextText}
+环境数据：
+${contextText || '无实时数据'}
 
-用户问题：
-${message}
+用户问题：${message}
 `.trim();
 
-    // 4. 调用通义千问
+    // 调用AI
     const completion = await openai.chat.completions.create({
-      model: 'qwen-flash',
-      messages: [{ role: 'user', content: finalPrompt }]
+      model: "qwen-flash",
+      messages: [{ role: "user", content: finalPrompt }],
+      temperature: 0.4
     });
 
-    // 5. 返回格式不变：{ reply: "..." }
+    // 返回格式不变
     res.json({
-      reply: completion.choices[0].message.content || '分析失败'
+      reply: completion.choices[0].message.content || "分析失败"
     });
 
-  } catch (error) {
-    console.error('Error:', error);
-    res.status(500).json({ reply: '服务异常，请稍后再试' });
+  } catch (err) {
+    res.status(500).json({ reply: "服务异常，请稍后再试" });
   }
 });
 
 app.listen(port, () => {
-  console.log(`🚀 Server running on port ${port}`);
+  console.log(`🚀 服务已启动: ${port}`);
 });
