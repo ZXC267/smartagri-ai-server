@@ -11,8 +11,9 @@ const port = process.env.PORT || 8080;
 app.use(cors());
 app.use(express.json());
 
+// 🔥 关键修复：强制使用正确的 API Key，不依赖环境变量
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY || 'sk-aba6b3ce7cd64566b6add2868c234f6',
+  apiKey: 'sk-aba6b3ce7cd64566b6add2868c234f6', // 写死你的真实密钥
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 });
 
@@ -20,7 +21,6 @@ app.get('/', (req, res) => {
   res.send('✅ 智慧农业AI服务运行正常');
 });
 
-// 【修改后的 /chat 接口】支持解析字符串格式的 context
 app.post('/chat', async (req, res) => {
   try {
     const { message, context } = req.body || {};
@@ -29,22 +29,22 @@ app.post('/chat', async (req, res) => {
       return res.status(400).json({ reply: '请输入问题' });
     }
 
-    // 核心改动：如果 context 是字符串，先 parse 成对象
+    // 解析字符串格式的 context
     let parsedContext = {};
     if (context) {
       if (typeof context === 'string') {
         try {
           parsedContext = JSON.parse(context);
-        } catch (parseErr) {
-          console.error('context JSON 解析失败:', parseErr);
-          parsedContext = {}; // 解析失败时用空对象兜底，不影响服务运行
+        } catch (e) {
+          console.error('❌ context JSON 解析失败:', e);
+          parsedContext = {};
         }
       } else {
-        parsedContext = context; // 已经是对象就直接用
+        parsedContext = context;
       }
     }
 
-    // 拼接 prompt 时用解析后的 parsedContext
+    // 构建环境数据文本
     let contextText = '';
     if (parsedContext) {
       contextText = `
@@ -83,23 +83,31 @@ ${contextText}
 请根据以上数据，给出专业、实用的建议。
 `;
 
-    const completion = await openai.chat.completions.create({
-      model: 'qwen-turbo',
-      messages: [{ role: 'user', content: fullPrompt }]
-    });
+    // 🔥 主要修复：增加详细错误捕获
+    try {
+      const completion = await openai.chat.completions.create({
+        model: 'qwen-turbo',
+        messages: [{ role: 'user', content: fullPrompt }]
+      });
 
-    return res.json({
-      reply: completion.choices[0].message.content
-    });
+      return res.json({
+        reply: completion.choices[0].message.content
+      });
+    } catch (aiError) {
+      console.error('❌ 千问 AI 调用失败:', aiError.response?.data || aiError.message);
+      return res.json({
+        reply: 'AI 服务调用失败，请检查密钥或网络连接。" + (aiError.response?.data?.message || "")'
+      });
+    }
 
   } catch (error) {
-    console.error('AI接口错误:', error);
+    console.error('❌ 服务器内部错误:', error);
     return res.json({
-      reply: '抱歉，暂时无法获取AI分析，请稍后再试。'
+      reply: '服务器内部错误，请稍后再试。'
     });
   }
 });
 
 app.listen(port, () => {
-  console.log(`服务已启动，端口：${port}`);
+  console.log(`🚀 服务已启动，端口：${port}`);
 });
