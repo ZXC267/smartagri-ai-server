@@ -1,5 +1,5 @@
 {
-  "name": "smartagri-ai-server",
+  "name": "ai-server",
   "version": "1.0.0",
   "type": "module",
   "main": "server.js",
