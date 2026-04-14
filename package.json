@@ -7,10 +7,11 @@
     "start": "node server.js"
   },
   "dependencies": {
-    "axios": "^1.7.7",
-    "express": "^4.19.2",
+    "@huaweicloud/huaweicloud-sdk-core": "^3.1.120",
+    "@huaweicloud/huaweicloud-sdk-iotda": "^3.1.120",
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
+    "express": "^4.19.2",
     "openai": "^4.47.1"
   }
 }
