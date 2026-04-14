@@ -12,7 +12,7 @@ app.use(cors());
 app.use(express.json());
 
 const openai = new OpenAI({
-  apiKey: 'sk-aba6b3ce7cd64566b6add2868c2c34f6',
+  apiKey: process.env.DASHSCOPE_API_KEY,
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 });
 
@@ -22,48 +22,54 @@ app.get('/', (req, res) => {
 });
 
 // ==============================
-// 【新增】给 App 用的最新状态接口
+// 给 App 用的最新状态接口
 // ==============================
 app.get('/status/latest', async (req, res) => {
   try {
-    // 先返回假数据，让 App 接通
     const data = {
-      temperature: 26.3,
-      humidity: 58.2,
-      luminance: 354,
+      Temperature: 26.3,
+      Humidity: 58.2,
+      Luminance: 354,
       soilVoltage: 0.32,
       eco2: 400,
       tvoc: 0,
-      pump: "OFF",
-      lightCtrl: "OFF",
-      fanCtrl: "OFF",
-      buzzer: "OFF",
-      tempAlarm: "OFF",
-      soilAlarm: "OFF",
-      lightMode: "AUTO",
-      fanMode: "AUTO",
-      pumpMode: "AUTO"
+      pump: 'OFF',
+      lightCtrl: 'OFF',
+      fanCtrl: 'OFF',
+      buzzer: 'OFF',
+      tempAlarm: 'OFF',
+      soilAlarm: 'OFF',
+      lightMode: 'AUTO',
+      fanMode: 'AUTO',
+      pumpMode: 'AUTO'
     };
+
     res.json(data);
   } catch (error) {
-    res.status(500).json({ error: "failed to get latest status" });
+    res.status(500).json({ error: 'failed to get latest status' });
   }
 });
 
 // ==============================
-// 原来的 AI 对话接口（保留）
+// AI 对话接口
 // ==============================
 app.post('/chat', async (req, res) => {
   try {
     const { message, context } = req.body || {};
+
     if (!message) {
       return res.status(400).json({ reply: '请输入问题' });
     }
 
     let parsedContext = {};
+
     if (context) {
       if (typeof context === 'string') {
-        try { parsedContext = JSON.parse(context); } catch { parsedContext = {}; }
+        try {
+          parsedContext = JSON.parse(context);
+        } catch {
+          parsedContext = {};
+        }
       } else {
         parsedContext = context;
       }
@@ -71,7 +77,7 @@ app.post('/chat', async (req, res) => {
 
     const fullPrompt = `
 你是智慧农业助手。
-要求：回答**简短、一句话、适合手机看**。
+要求：回答简短、一句话、适合手机看。
 不要解释原理，只给结论。
 
 用户问题：${message}
@@ -80,6 +86,17 @@ app.post('/chat', async (req, res) => {
 湿度:${parsedContext.humidity ?? '--'}
 光照:${parsedContext.luminance ?? '--'}
 土壤:${parsedContext.soilVoltage ?? '--'}
+eCO2:${parsedContext.eco2 ?? '--'}
+TVOC:${parsedContext.tvoc ?? '--'}
+水泵:${parsedContext.pump ?? '--'}
+补光:${parsedContext.lightCtrl ?? '--'}
+风机:${parsedContext.fanCtrl ?? '--'}
+蜂鸣器:${parsedContext.buzzer ?? '--'}
+温度报警:${parsedContext.tempAlarm ?? '--'}
+土壤报警:${parsedContext.soilAlarm ?? '--'}
+补光模式:${parsedContext.lightMode ?? '--'}
+风机模式:${parsedContext.fanMode ?? '--'}
+水泵模式:${parsedContext.pumpMode ?? '--'}
 
 请直接给建议：
 `;
@@ -89,9 +106,11 @@ app.post('/chat', async (req, res) => {
       messages: [{ role: 'user', content: fullPrompt }]
     });
 
-    res.json({ reply: completion.choices[0].message.content });
+    res.json({
+      reply: completion.choices[0]?.message?.content || '暂时没有拿到有效回复'
+    });
   } catch (err) {
-    res.json({ reply: "AI 服务暂时不可用" });
+    res.json({ reply: 'AI 服务暂时不可用' });
   }
 });
 
