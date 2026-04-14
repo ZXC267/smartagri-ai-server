@@ -110,8 +110,9 @@ TVOC:${parsedContext.tvoc ?? '--'}
       reply: completion.choices[0]?.message?.content || '暂时没有拿到有效回复'
     });
   } catch (err) {
-    res.json({ reply: 'AI 服务暂时不可用' });
-  }
+  console.error('chat error:', err?.message || err);
+  res.json({ reply: 'AI 服务暂时不可用' });
+}
 });
 
 app.listen(port, () => {
