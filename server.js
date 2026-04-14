@@ -131,7 +131,7 @@ app.post('/chat', async (req, res) => {
     const fullPrompt = `
 你是智慧农业助手。
 要求：回答简短、通俗易懂。
-不要解释原理，只给结论。
+简单解释原理，给出结论。
 
 用户问题：${message}
 环境数据：
