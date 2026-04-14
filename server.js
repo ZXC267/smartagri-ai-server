@@ -1,8 +1,10 @@
 import express from 'express';
 import cors from 'cors';
-import axios from 'axios';
-import { OpenAI } from 'openai';
 import dotenv from 'dotenv';
+import { OpenAI } from 'openai';
+
+import * as core from '@huaweicloud/huaweicloud-sdk-core';
+import * as iotda from '@huaweicloud/huaweicloud-sdk-iotda/v5/public-api';
 
 dotenv.config();
 
@@ -17,87 +19,82 @@ const openai = new OpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 });
 
-
-
-// ==============================
-// 查询华为云 IoTDA 设备影子
-// ==============================
-async function getDeviceShadow() {
-  const token = process.env.HW_IAM_TOKEN;
-
+function createIotdaClient() {
+  const ak = process.env.HW_AK;
+  const sk = process.env.HW_SK;
   const region = process.env.HW_REGION;
-  const projectId = process.env.HW_PROJECT_ID;
-  const deviceId = process.env.HW_DEVICE_ID;
 
-  if (!token || !region || !projectId || !deviceId) {
-    throw new Error('missing huawei iot env variables');
+  if (!ak || !sk || !region) {
+    throw new Error('missing HW_AK / HW_SK / HW_REGION');
   }
 
-  const shadowUrl = `https://iotda.${region}.myhuaweicloud.com/v5/iot/${projectId}/devices/${deviceId}/shadow`;
+  const credentials = new core.BasicCredentials()
+    .withAk(ak)
+    .withSk(sk);
 
-  const response = await axios.get(shadowUrl, {
-    headers: {
-      'X-Auth-Token': token
-    }
-  });
+  const endpoint = `https://iotda.${region}.myhuaweicloud.com`;
 
-  return response.data;
+  return iotda.IoTDAClient.newBuilder()
+    .withCredential(credentials)
+    .withEndpoint(endpoint)
+    .build();
 }
 
-// ==============================
-// 从影子数据里提取 reported 属性
-// ==============================
-function extractReportedProperties(shadowData) {
-  const shadowList = shadowData?.shadow;
-
-  if (!Array.isArray(shadowList) || shadowList.length === 0) {
-    return {};
-  }
+function normalizeShadowToAppData(shadowData) {
+  const shadowList = shadowData?.shadow || [];
+  let reported = {};
 
   for (const item of shadowList) {
     if (item?.reported?.properties) {
-      return item.reported.properties;
+      reported = item.reported.properties;
+      break;
     }
     if (item?.reported) {
-      return item.reported;
+      reported = item.reported;
+      break;
     }
   }
 
-  return {};
+  return {
+    Temperature: Number(reported.Temperature ?? 0),
+    Humidity: Number(reported.Humidity ?? 0),
+    Luminance: Number(reported.Luminance ?? 0),
+    soilVoltage: Number(reported.soilVoltage ?? 0),
+    eco2: Number(reported.eco2 ?? 0),
+    tvoc: Number(reported.tvoc ?? 0),
+    pump: String(reported.pump ?? 'OFF'),
+    lightCtrl: String(reported.lightCtrl ?? 'OFF'),
+    fanCtrl: String(reported.fanCtrl ?? 'OFF'),
+    buzzer: String(reported.buzzer ?? 'OFF'),
+    tempAlarm: String(reported.tempAlarm ?? 'OFF'),
+    soilAlarm: String(reported.soilAlarm ?? 'OFF'),
+    lightMode: String(reported.lightMode ?? 'AUTO'),
+    fanMode: String(reported.fanMode ?? 'AUTO'),
+    pumpMode: String(reported.pumpMode ?? 'AUTO')
+  };
 }
 
-// ==============================
-// 测试接口
-// ==============================
 app.get('/', (req, res) => {
   res.send('✅ 智慧农业AI服务运行正常');
 });
 
-// ==============================
-// 给 App 用的最新状态接口
-// ==============================
 app.get('/status/latest', async (req, res) => {
   try {
-    const shadowData = await getDeviceShadow();
-    const reported = extractReportedProperties(shadowData);
+    const projectId = process.env.HW_PROJECT_ID;
+    const deviceId = process.env.HW_DEVICE_ID;
 
-    const data = {
-      Temperature: Number(reported.Temperature ?? 0),
-      Humidity: Number(reported.Humidity ?? 0),
-      Luminance: Number(reported.Luminance ?? 0),
-      soilVoltage: Number(reported.soilVoltage ?? 0),
-      eco2: Number(reported.eco2 ?? 0),
-      tvoc: Number(reported.tvoc ?? 0),
-      pump: String(reported.pump ?? 'OFF'),
-      lightCtrl: String(reported.lightCtrl ?? 'OFF'),
-      fanCtrl: String(reported.fanCtrl ?? 'OFF'),
-      buzzer: String(reported.buzzer ?? 'OFF'),
-      tempAlarm: String(reported.tempAlarm ?? 'OFF'),
-      soilAlarm: String(reported.soilAlarm ?? 'OFF'),
-      lightMode: String(reported.lightMode ?? 'AUTO'),
-      fanMode: String(reported.fanMode ?? 'AUTO'),
-      pumpMode: String(reported.pumpMode ?? 'AUTO')
-    };
+    if (!projectId || !deviceId) {
+      throw new Error('missing HW_PROJECT_ID / HW_DEVICE_ID');
+    }
+
+    const client = createIotdaClient();
+
+    const request = new iotda.ShowDeviceShadowRequest();
+    request.projectId = projectId;
+    request.deviceId = deviceId;
+
+    const response = await client.showDeviceShadow(request);
+    const data = normalizeShadowToAppData(response);
 
     res.json(data);
   } catch (error) {
@@ -109,9 +106,6 @@ app.get('/status/latest', async (req, res) => {
   }
 });
 
-// ==============================
-// AI 对话接口
-// ==============================
 app.post('/chat', async (req, res) => {
   try {
     const { message, context } = req.body || {};
@@ -136,7 +130,7 @@ app.post('/chat', async (req, res) => {
 
     const fullPrompt = `
 你是智慧农业助手。
-要求：回答简短、简单易懂。
+要求：回答简短、通俗易懂。
 不要解释原理，只给结论。
 
 用户问题：${message}
