@@ -12,7 +12,7 @@ app.use(cors());
 app.use(express.json());
 
 const openai = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY,
+  apiKey: 'sk-aba6b3ce7cd64566b6add2868c2c34f6',
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 });
 
