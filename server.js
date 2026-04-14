@@ -1,5 +1,6 @@
 import express from 'express';
 import cors from 'cors';
+import axios from 'axios';
 import { OpenAI } from 'openai';
 import dotenv from 'dotenv';
 
@@ -16,7 +17,99 @@ const openai = new OpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 });
 
+// ==============================
+// 华为云 IAM Token
+// ==============================
+async function getIamToken() {
+  const iamUrl = 'https://iam.myhuaweicloud.com/v3/auth/tokens';
+
+  const body = {
+    auth: {
+      identity: {
+        methods: ['password'],
+        password: {
+          user: {
+            name: process.env.HW_IAM_USERNAME,
+            password: process.env.HW_IAM_PASSWORD,
+            domain: {
+              name: process.env.HW_IAM_DOMAIN
+            }
+          }
+        }
+      },
+      scope: {
+        project: {
+          name: process.env.HW_REGION
+        }
+      }
+    }
+  };
+
+  const response = await axios.post(iamUrl, body, {
+    headers: {
+      'Content-Type': 'application/json'
+    }
+  });
+
+  const token = response.headers['x-subject-token'];
+
+  if (!token) {
+    throw new Error('failed to get huawei iam token');
+  }
+
+  return token;
+}
+
+// ==============================
+// 查询华为云 IoTDA 设备影子
+// ==============================
+async function getDeviceShadow() {
+  const token = await getIamToken();
+
+  const region = process.env.HW_REGION;
+  const projectId = process.env.HW_PROJECT_ID;
+  const deviceId = process.env.HW_DEVICE_ID;
+
+  if (!region || !projectId || !deviceId) {
+    throw new Error('missing huawei iot env variables');
+  }
+
+  const shadowUrl = `https://iotda.${region}.myhuaweicloud.com/v5/iot/${projectId}/devices/${deviceId}/shadow`;
+
+  const response = await axios.get(shadowUrl, {
+    headers: {
+      'X-Auth-Token': token
+    }
+  });
+
+  return response.data;
+}
+
+// ==============================
+// 从影子数据里提取 reported 属性
+// ==============================
+function extractReportedProperties(shadowData) {
+  const shadowList = shadowData?.shadow;
+
+  if (!Array.isArray(shadowList) || shadowList.length === 0) {
+    return {};
+  }
+
+  for (const item of shadowList) {
+    if (item?.reported?.properties) {
+      return item.reported.properties;
+    }
+    if (item?.reported) {
+      return item.reported;
+    }
+  }
+
+  return {};
+}
+
+// ==============================
 // 测试接口
+// ==============================
 app.get('/', (req, res) => {
   res.send('✅ 智慧农业AI服务运行正常');
 });
@@ -26,27 +119,34 @@ app.get('/', (req, res) => {
 // ==============================
 app.get('/status/latest', async (req, res) => {
   try {
+    const shadowData = await getDeviceShadow();
+    const reported = extractReportedProperties(shadowData);
+
     const data = {
-      Temperature: 26.3,
-      Humidity: 58.2,
-      Luminance: 354,
-      soilVoltage: 0.32,
-      eco2: 400,
-      tvoc: 0,
-      pump: 'OFF',
-      lightCtrl: 'OFF',
-      fanCtrl: 'OFF',
-      buzzer: 'OFF',
-      tempAlarm: 'OFF',
-      soilAlarm: 'OFF',
-      lightMode: 'AUTO',
-      fanMode: 'AUTO',
-      pumpMode: 'AUTO'
+      Temperature: Number(reported.Temperature ?? 0),
+      Humidity: Number(reported.Humidity ?? 0),
+      Luminance: Number(reported.Luminance ?? 0),
+      soilVoltage: Number(reported.soilVoltage ?? 0),
+      eco2: Number(reported.eco2 ?? 0),
+      tvoc: Number(reported.tvoc ?? 0),
+      pump: String(reported.pump ?? 'OFF'),
+      lightCtrl: String(reported.lightCtrl ?? 'OFF'),
+      fanCtrl: String(reported.fanCtrl ?? 'OFF'),
+      buzzer: String(reported.buzzer ?? 'OFF'),
+      tempAlarm: String(reported.tempAlarm ?? 'OFF'),
+      soilAlarm: String(reported.soilAlarm ?? 'OFF'),
+      lightMode: String(reported.lightMode ?? 'AUTO'),
+      fanMode: String(reported.fanMode ?? 'AUTO'),
+      pumpMode: String(reported.pumpMode ?? 'AUTO')
     };
 
     res.json(data);
   } catch (error) {
-    res.status(500).json({ error: 'failed to get latest status' });
+    console.error(
+      'status latest error:',
+      error?.response?.data || error?.message || error
+    );
+    res.status(500).json({ error: 'failed to get latest status from huawei iotda' });
   }
 });
 
@@ -77,7 +177,7 @@ app.post('/chat', async (req, res) => {
 
     const fullPrompt = `
 你是智慧农业助手。
-要求：回答简短、一句话、适合手机看。
+要求：回答简短、简单易懂。
 不要解释原理，只给结论。
 
 用户问题：${message}
@@ -110,9 +210,9 @@ TVOC:${parsedContext.tvoc ?? '--'}
       reply: completion.choices[0]?.message?.content || '暂时没有拿到有效回复'
     });
   } catch (err) {
-  console.error('chat error:', err?.message || err);
-  res.json({ reply: 'AI 服务暂时不可用' });
-}
+    console.error('chat error:', err?.message || err);
+    res.json({ reply: 'AI 服务暂时不可用' });
+  }
 });
 
 app.listen(port, () => {
