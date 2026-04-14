@@ -22,17 +22,15 @@ const openai = new OpenAI({
 function createIotdaClient() {
   const ak = process.env.HW_AK;
   const sk = process.env.HW_SK;
-  const region = process.env.HW_REGION;
+  const endpoint = process.env.HW_IOTDA_ENDPOINT;
 
-  if (!ak || !sk || !region) {
-    throw new Error('missing HW_AK / HW_SK / HW_REGION');
+  if (!ak || !sk || !endpoint) {
+    throw new Error('missing HW_AK / HW_SK / HW_IOTDA_ENDPOINT');
   }
 
   const credentials = new core.BasicCredentials()
     .withAk(ak)
     .withSk(sk);
-
-  const endpoint = `https://iotda.${region}.myhuaweicloud.com`;
 
   return iotda.IoTDAClient.newBuilder()
     .withCredential(credentials)
