@@ -14,23 +14,27 @@ const port = process.env.PORT || 8080;
 app.use(cors());
 app.use(express.json());
 
+// 通义千问客户端
 const openai = new OpenAI({
   apiKey: process.env.DASHSCOPE_API_KEY,
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 });
 
+// 创建华为云 IoTDA 客户端（projectId 在这里配置）
 function createIotdaClient() {
   const ak = process.env.HW_AK;
   const sk = process.env.HW_SK;
   const endpoint = process.env.HW_IOTDA_ENDPOINT;
+  const projectId = process.env.HW_PROJECT_ID;
 
-  if (!ak || !sk || !endpoint) {
-    throw new Error('missing HW_AK / HW_SK / HW_IOTDA_ENDPOINT');
+  if (!ak || !sk || !endpoint || !projectId) {
+    throw new Error('缺少环境变量: HW_AK / HW_SK / HW_IOTDA_ENDPOINT / HW_PROJECT_ID');
   }
 
   const credentials = new core.BasicCredentials()
     .withAk(ak)
-    .withSk(sk);
+    .withSk(sk)
+    .withProjectId(projectId);  // ✅ projectId 在这里设置
 
   return iotda.IoTDAClient.newBuilder()
     .withCredential(credentials)
@@ -38,6 +42,7 @@ function createIotdaClient() {
     .build();
 }
 
+// 解析设备影子数据，转换成 App 需要的格式
 function normalizeShadowToAppData(shadowData) {
   const shadowList = shadowData?.shadow || [];
   let reported = {};
@@ -72,38 +77,36 @@ function normalizeShadowToAppData(shadowData) {
   };
 }
 
+// 健康检查
 app.get('/', (req, res) => {
   res.send('✅ 智慧农业AI服务运行正常');
 });
 
+// 获取设备最新状态
 app.get('/status/latest', async (req, res) => {
   try {
-    const projectId = process.env.HW_PROJECT_ID;
     const deviceId = process.env.HW_DEVICE_ID;
 
-    if (!projectId || !deviceId) {
-      throw new Error('missing HW_PROJECT_ID / HW_DEVICE_ID');
+    if (!deviceId) {
+      throw new Error('缺少环境变量: HW_DEVICE_ID');
     }
 
     const client = createIotdaClient();
 
     const request = new iotda.ShowDeviceShadowRequest();
-    request.projectId = projectId;
-    request.deviceId = deviceId;
+    request.deviceId = deviceId;  // ✅ 只需要设置 deviceId，projectId 已在 client 中
 
     const response = await client.showDeviceShadow(request);
     const data = normalizeShadowToAppData(response);
 
     res.json(data);
   } catch (error) {
-    console.error(
-      'status latest error:',
-      error?.response?.data || error?.message || error
-    );
-    res.status(500).json({ error: 'failed to get latest status from huawei iotda' });
+    console.error('获取设备状态失败:', error?.response?.data || error?.message || error);
+    res.status(500).json({ error: '获取设备状态失败' });
   }
 });
 
+// AI 对话接口
 app.post('/chat', async (req, res) => {
   try {
     const { message, context } = req.body || {};
@@ -132,24 +135,31 @@ app.post('/chat', async (req, res) => {
 简单解释原理，给出结论。
 
 用户问题：${message}
-环境数据：
-温度:${parsedContext.temperature ?? '--'}
-湿度:${parsedContext.humidity ?? '--'}
-光照:${parsedContext.luminance ?? '--'}
-土壤:${parsedContext.soilVoltage ?? '--'}
-eCO2:${parsedContext.eco2 ?? '--'}
-TVOC:${parsedContext.tvoc ?? '--'}
-水泵:${parsedContext.pump ?? '--'}
-补光:${parsedContext.lightCtrl ?? '--'}
-风机:${parsedContext.fanCtrl ?? '--'}
-蜂鸣器:${parsedContext.buzzer ?? '--'}
-温度报警:${parsedContext.tempAlarm ?? '--'}
-土壤报警:${parsedContext.soilAlarm ?? '--'}
-补光模式:${parsedContext.lightMode ?? '--'}
-风机模式:${parsedContext.fanMode ?? '--'}
-水泵模式:${parsedContext.pumpMode ?? '--'}
 
-请直接给建议：
+当前环境数据：
+- 温度: ${parsedContext.temperature ?? '--'} ℃
+- 湿度: ${parsedContext.humidity ?? '--'} %
+- 光照: ${parsedContext.luminance ?? '--'} Lux
+- 土壤电压: ${parsedContext.soilVoltage ?? '--'} V
+- eCO₂: ${parsedContext.eco2 ?? '--'} ppm
+- TVOC: ${parsedContext.tvoc ?? '--'} ppb
+
+设备状态：
+- 水泵: ${parsedContext.pump ?? '--'}
+- 补光灯: ${parsedContext.lightCtrl ?? '--'}
+- 风机: ${parsedContext.fanCtrl ?? '--'}
+- 蜂鸣器: ${parsedContext.buzzer ?? '--'}
+
+报警状态：
+- 温度报警: ${parsedContext.tempAlarm ?? '--'}
+- 土壤报警: ${parsedContext.soilAlarm ?? '--'}
+
+控制模式：
+- 补光模式: ${parsedContext.lightMode ?? '--'}
+- 风机模式: ${parsedContext.fanMode ?? '--'}
+- 水泵模式: ${parsedContext.pumpMode ?? '--'}
+
+请根据以上数据，给出简短、实用的建议：
 `;
 
     const completion = await openai.chat.completions.create({
@@ -161,11 +171,12 @@ TVOC:${parsedContext.tvoc ?? '--'}
       reply: completion.choices[0]?.message?.content || '暂时没有拿到有效回复'
     });
   } catch (err) {
-    console.error('chat error:', err?.message || err);
-    res.json({ reply: 'AI 服务暂时不可用' });
+    console.error('AI 对话错误:', err?.message || err);
+    res.json({ reply: 'AI 服务暂时不可用，请稍后再试' });
   }
 });
 
+// 启动服务
 app.listen(port, () => {
-  console.log(`服务已启动: ${port}`);
+  console.log(`✅ 服务已启动: ${port}`);
 });
