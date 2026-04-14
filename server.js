@@ -4,7 +4,7 @@ import dotenv from 'dotenv';
 import { OpenAI } from 'openai';
 
 import * as core from '@huaweicloud/huaweicloud-sdk-core';
-import * as iotda from '@huaweicloud/huaweicloud-sdk-iotda/v5/public-api';
+import * as iotda from '@huaweicloud/huaweicloud-sdk-iotda/v5/public-api.js';
 
 dotenv.config();
 
