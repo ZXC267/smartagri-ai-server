@@ -2,9 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { OpenAI } from 'openai';
-
-import * as core from '@huaweicloud/huaweicloud-sdk-core';
-import * as iotda from '@huaweicloud/huaweicloud-sdk-iotda/v5/public-api.js';
+import axios from 'axios';
+import crypto from 'crypto';
 
 dotenv.config();
 
@@ -20,90 +19,109 @@ const openai = new OpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 });
 
-// 创建华为云 IoTDA 客户端（projectId 在这里配置）
-function createIotdaClient() {
-  const ak = process.env.HW_AK;
-  const sk = process.env.HW_SK;
-  const endpoint = process.env.HW_IOTDA_ENDPOINT;
-  const projectId = process.env.HW_PROJECT_ID;
-
-  if (!ak || !sk || !endpoint || !projectId) {
-    throw new Error('缺少环境变量: HW_AK / HW_SK / HW_IOTDA_ENDPOINT / HW_PROJECT_ID');
-  }
-
-  const credentials = new core.BasicCredentials()
-    .withAk(ak)
-    .withSk(sk)
-    .withProjectId(projectId);  // ✅ projectId 在这里设置
-
-  return iotda.IoTDAClient.newBuilder()
-    .withCredential(credentials)
-    .withEndpoint(endpoint)
-    .build();
+// 生成华为云 API 签名
+function hmacSha256(key, data) {
+  return crypto.createHmac('sha256', key).update(data).digest();
 }
 
-// 解析设备影子数据，转换成 App 需要的格式
-function normalizeShadowToAppData(shadowData) {
-  const shadowList = shadowData?.shadow || [];
-  let reported = {};
-
-  for (const item of shadowList) {
-    if (item?.reported?.properties) {
-      reported = item.reported.properties;
-      break;
-    }
-    if (item?.reported) {
-      reported = item.reported;
-      break;
-    }
-  }
-
-  return {
-    Temperature: Number(reported.Temperature ?? 0),
-    Humidity: Number(reported.Humidity ?? 0),
-    Luminance: Number(reported.Luminance ?? 0),
-    soilVoltage: Number(reported.soilVoltage ?? 0),
-    eco2: Number(reported.eco2 ?? 0),
-    tvoc: Number(reported.tvoc ?? 0),
-    pump: String(reported.pump ?? 'OFF'),
-    lightCtrl: String(reported.lightCtrl ?? 'OFF'),
-    fanCtrl: String(reported.fanCtrl ?? 'OFF'),
-    buzzer: String(reported.buzzer ?? 'OFF'),
-    tempAlarm: String(reported.tempAlarm ?? 'OFF'),
-    soilAlarm: String(reported.soilAlarm ?? 'OFF'),
-    lightMode: String(reported.lightMode ?? 'AUTO'),
-    fanMode: String(reported.fanMode ?? 'AUTO'),
-    pumpMode: String(reported.pumpMode ?? 'AUTO')
-  };
+function buildSignature(ak, sk, method, url, headers, body = '') {
+  const timestamp = headers['X-Sdk-Date'];
+  const contentType = headers['Content-Type'] || '';
+  const contentSha256 = crypto.createHash('sha256').update(body).digest('hex');
+  
+  const canonicalHeaders = `content-type:${contentType}\nhost:${headers.host}\nx-project-id:${headers['X-Project-Id']}\nx-sdk-date:${timestamp}\n`;
+  const signedHeaders = 'content-type;host;x-project-id;x-sdk-date';
+  
+  const canonicalRequest = `${method}\n${url}\n\n${canonicalHeaders}\n${signedHeaders}\n${contentSha256}`;
+  
+  const date = timestamp.substring(0, 8);
+  const credentialScope = `${date}/iotda/cn-east-3/sdk_request`;
+  const stringToSign = `SDK-HMAC-SHA256\n${timestamp}\n${credentialScope}\n${crypto.createHash('sha256').update(canonicalRequest).digest('hex')}`;
+  
+  const dateKey = hmacSha256(`SDK-HMAC-SHA256${sk}`, date);
+  const regionKey = hmacSha256(dateKey, 'iotda');
+  const serviceKey = hmacSha256(regionKey, 'cn-east-3');
+  const signingKey = hmacSha256(serviceKey, 'sdk_request');
+  const signature = crypto.createHmac('sha256', signingKey).update(stringToSign).digest('hex');
+  
+  return `SDK-HMAC-SHA256 Access=${ak}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
 }
+
+// 获取设备状态
+app.get('/status/latest', async (req, res) => {
+  try {
+    const ak = process.env.HW_AK;
+    const sk = process.env.HW_SK;
+    const projectId = process.env.HW_PROJECT_ID;
+    const deviceId = process.env.HW_DEVICE_ID;
+    const endpoint = process.env.HW_IOTDA_ENDPOINT;
+
+    if (!ak || !sk || !projectId || !deviceId || !endpoint) {
+      throw new Error('缺少环境变量');
+    }
+
+    // 提取 host（去掉 https://）
+    const host = endpoint.replace('https://', '');
+    
+    // API 路径（查询设备影子）
+    const path = `/v5/iot/${projectId}/devices/${deviceId}/shadow`;
+    const method = 'GET';
+    const timestamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
+    
+    const headers = {
+      'Content-Type': 'application/json',
+      'X-Sdk-Date': timestamp,
+      'X-Project-Id': projectId,
+      'host': host
+    };
+    
+    const signature = buildSignature(ak, sk, method, path, headers);
+    headers['Authorization'] = signature;
+    
+    const response = await axios.get(`${endpoint}${path}`, { headers });
+    
+    // 解析设备数据
+    const shadowList = response.data?.shadow || [];
+    let reported = {};
+    for (const item of shadowList) {
+      if (item?.reported?.properties) {
+        reported = item.reported.properties;
+        break;
+      }
+      if (item?.reported) {
+        reported = item.reported;
+        break;
+      }
+    }
+    
+    const deviceData = {
+      Temperature: Number(reported.Temperature ?? 0),
+      Humidity: Number(reported.Humidity ?? 0),
+      Luminance: Number(reported.Luminance ?? 0),
+      soilVoltage: Number(reported.soilVoltage ?? 0),
+      eco2: Number(reported.eco2 ?? 0),
+      tvoc: Number(reported.tvoc ?? 0),
+      pump: String(reported.pump ?? 'OFF'),
+      lightCtrl: String(reported.lightCtrl ?? 'OFF'),
+      fanCtrl: String(reported.fanCtrl ?? 'OFF'),
+      buzzer: String(reported.buzzer ?? 'OFF'),
+      tempAlarm: String(reported.tempAlarm ?? 'OFF'),
+      soilAlarm: String(reported.soilAlarm ?? 'OFF'),
+      lightMode: String(reported.lightMode ?? 'AUTO'),
+      fanMode: String(reported.fanMode ?? 'AUTO'),
+      pumpMode: String(reported.pumpMode ?? 'AUTO')
+    };
+    
+    res.json(deviceData);
+  } catch (error) {
+    console.error('获取设备状态失败:', error?.response?.data || error?.message);
+    res.status(500).json({ error: '获取设备状态失败' });
+  }
+});
 
 // 健康检查
 app.get('/', (req, res) => {
   res.send('✅ 智慧农业AI服务运行正常');
-});
-
-// 获取设备最新状态
-app.get('/status/latest', async (req, res) => {
-  try {
-    const deviceId = process.env.HW_DEVICE_ID;
-
-    if (!deviceId) {
-      throw new Error('缺少环境变量: HW_DEVICE_ID');
-    }
-
-    const client = createIotdaClient();
-
-    const request = new iotda.ShowDeviceShadowRequest();
-    request.deviceId = deviceId;  // ✅ 只需要设置 deviceId，projectId 已在 client 中
-
-    const response = await client.showDeviceShadow(request);
-    const data = normalizeShadowToAppData(response);
-
-    res.json(data);
-  } catch (error) {
-    console.error('获取设备状态失败:', error?.response?.data || error?.message || error);
-    res.status(500).json({ error: '获取设备状态失败' });
-  }
 });
 
 // AI 对话接口
@@ -116,7 +134,6 @@ app.post('/chat', async (req, res) => {
     }
 
     let parsedContext = {};
-
     if (context) {
       if (typeof context === 'string') {
         try {
@@ -176,7 +193,6 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// 启动服务
 app.listen(port, () => {
   console.log(`✅ 服务已启动: ${port}`);
 });
