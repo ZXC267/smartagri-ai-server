@@ -17,61 +17,19 @@ const openai = new OpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 });
 
-// ==============================
-// 华为云 IAM Token
-// ==============================
-async function getIamToken() {
-  const iamUrl = 'https://iam.myhuaweicloud.com/v3/auth/tokens';
-
-  const body = {
-    auth: {
-      identity: {
-        methods: ['password'],
-        password: {
-          user: {
-            name: process.env.HW_IAM_USERNAME,
-            password: process.env.HW_IAM_PASSWORD,
-            domain: {
-              name: process.env.HW_IAM_DOMAIN
-            }
-          }
-        }
-      },
-      scope: {
-        project: {
-          name: process.env.HW_REGION
-        }
-      }
-    }
-  };
-
-  const response = await axios.post(iamUrl, body, {
-    headers: {
-      'Content-Type': 'application/json'
-    }
-  });
-
-  const token = response.headers['x-subject-token'];
-
-  if (!token) {
-    throw new Error('failed to get huawei iam token');
-  }
-
-  return token;
-}
 
 
 // ==============================
 // 查询华为云 IoTDA 设备影子
 // ==============================
 async function getDeviceShadow() {
-  const token = await getIamToken();
+  const token = process.env.HW_IAM_TOKEN;
 
   const region = process.env.HW_REGION;
   const projectId = process.env.HW_PROJECT_ID;
   const deviceId = process.env.HW_DEVICE_ID;
 
-  if (!region || !projectId || !deviceId) {
+  if (!token || !region || !projectId || !deviceId) {
     throw new Error('missing huawei iot env variables');
   }
 
