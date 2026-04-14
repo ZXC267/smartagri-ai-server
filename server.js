@@ -2,8 +2,8 @@ import express from 'express';
 import cors from 'cors';
 import dotenv from 'dotenv';
 import { OpenAI } from 'openai';
-import axios from 'axios';
-import crypto from 'crypto';
+import * as core from '@huaweicloud/huaweicloud-sdk-core';
+import * as iotda from '@huaweicloud/huaweicloud-sdk-iotda/v5/public-api.js';
 
 dotenv.config();
 
@@ -19,109 +19,103 @@ const openai = new OpenAI({
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 });
 
-// 生成华为云 API 签名
-function hmacSha256(key, data) {
-  return crypto.createHmac('sha256', key).update(data).digest();
-}
+// 创建华为云 IoTDA 客户端
+function createIotdaClient() {
+  const ak = (process.env.HW_AK || '').trim();
+  const sk = (process.env.HW_SK || '').trim();
+  const endpoint = (process.env.HW_IOTDA_ENDPOINT || '').trim();
+  const projectId = (process.env.HW_PROJECT_ID || '').trim();
 
-function buildSignature(ak, sk, method, url, headers, body = '') {
-  const timestamp = headers['X-Sdk-Date'];
-  const contentType = headers['Content-Type'] || '';
-  const contentSha256 = crypto.createHash('sha256').update(body).digest('hex');
-  
-  const canonicalHeaders = `content-type:${contentType}\nhost:${headers.host}\nx-project-id:${headers['X-Project-Id']}\nx-sdk-date:${timestamp}\n`;
-  const signedHeaders = 'content-type;host;x-project-id;x-sdk-date';
-  
-  const canonicalRequest = `${method}\n${url}\n\n${canonicalHeaders}\n${signedHeaders}\n${contentSha256}`;
-  
-  const date = timestamp.substring(0, 8);
-  const credentialScope = `${date}/iotda/cn-east-3/sdk_request`;
-  const stringToSign = `SDK-HMAC-SHA256\n${timestamp}\n${credentialScope}\n${crypto.createHash('sha256').update(canonicalRequest).digest('hex')}`;
-  
-  const dateKey = hmacSha256(`SDK-HMAC-SHA256${sk}`, date);
-  const regionKey = hmacSha256(dateKey, 'iotda');
-  const serviceKey = hmacSha256(regionKey, 'cn-east-3');
-  const signingKey = hmacSha256(serviceKey, 'sdk_request');
-  const signature = crypto.createHmac('sha256', signingKey).update(stringToSign).digest('hex');
-  
-  return `SDK-HMAC-SHA256 Access=${ak}, SignedHeaders=${signedHeaders}, Signature=${signature}`;
-}
+  console.log('🔧 初始化 IoTDA 客户端...');
+  console.log(`   Endpoint: ${endpoint}`);
+  console.log(`   ProjectId: ${projectId}`);
+  console.log(`   AK: ${ak.substring(0, 10)}...`);
 
-// 获取设备状态
-app.get('/status/latest', async (req, res) => {
-  try {
-    const ak = process.env.HW_AK;
-    const sk = process.env.HW_SK;
-    const projectId = process.env.HW_PROJECT_ID;
-    const deviceId = process.env.HW_DEVICE_ID;
-    const endpoint = process.env.HW_IOTDA_ENDPOINT;
-
-    if (!ak || !sk || !projectId || !deviceId || !endpoint) {
-      throw new Error('缺少环境变量');
-    }
-
-    // 提取 host（去掉 https://）
-    const host = endpoint.replace('https://', '');
-    
-    // API 路径（查询设备影子）
-    const path = `/v5/iot/${projectId}/devices/${deviceId}/shadow`;
-    const method = 'GET';
-    const timestamp = new Date().toISOString().replace(/[^0-9]/g, '').slice(0, 14);
-    
-    const headers = {
-      'Content-Type': 'application/json',
-      'X-Sdk-Date': timestamp,
-      'X-Project-Id': projectId,
-      'host': host
-    };
-    
-    const signature = buildSignature(ak, sk, method, path, headers);
-    headers['Authorization'] = signature;
-    
-    const response = await axios.get(`${endpoint}${path}`, { headers });
-    
-    // 解析设备数据
-    const shadowList = response.data?.shadow || [];
-    let reported = {};
-    for (const item of shadowList) {
-      if (item?.reported?.properties) {
-        reported = item.reported.properties;
-        break;
-      }
-      if (item?.reported) {
-        reported = item.reported;
-        break;
-      }
-    }
-    
-    const deviceData = {
-      Temperature: Number(reported.Temperature ?? 0),
-      Humidity: Number(reported.Humidity ?? 0),
-      Luminance: Number(reported.Luminance ?? 0),
-      soilVoltage: Number(reported.soilVoltage ?? 0),
-      eco2: Number(reported.eco2 ?? 0),
-      tvoc: Number(reported.tvoc ?? 0),
-      pump: String(reported.pump ?? 'OFF'),
-      lightCtrl: String(reported.lightCtrl ?? 'OFF'),
-      fanCtrl: String(reported.fanCtrl ?? 'OFF'),
-      buzzer: String(reported.buzzer ?? 'OFF'),
-      tempAlarm: String(reported.tempAlarm ?? 'OFF'),
-      soilAlarm: String(reported.soilAlarm ?? 'OFF'),
-      lightMode: String(reported.lightMode ?? 'AUTO'),
-      fanMode: String(reported.fanMode ?? 'AUTO'),
-      pumpMode: String(reported.pumpMode ?? 'AUTO')
-    };
-    
-    res.json(deviceData);
-  } catch (error) {
-    console.error('获取设备状态失败:', error?.response?.data || error?.message);
-    res.status(500).json({ error: '获取设备状态失败' });
+  if (!ak || !sk || !endpoint || !projectId) {
+    throw new Error('缺少环境变量: HW_AK / HW_SK / HW_IOTDA_ENDPOINT / HW_PROJECT_ID');
   }
-});
+
+  const credentials = new core.BasicCredentials()
+    .withAk(ak)
+    .withSk(sk)
+    .withProjectId(projectId);
+
+  return iotda.IoTDAClient.newBuilder()
+    .withCredential(credentials)
+    .withEndpoint(endpoint)
+    .build();
+}
+
+// 解析设备数据
+function normalizeShadowToAppData(shadowData) {
+  const shadowList = shadowData?.shadow || [];
+  let reported = {};
+
+  for (const item of shadowList) {
+    if (item?.reported?.properties) {
+      reported = item.reported.properties;
+      break;
+    }
+    if (item?.reported) {
+      reported = item.reported;
+      break;
+    }
+  }
+
+  return {
+    Temperature: Number(reported.Temperature ?? 0),
+    Humidity: Number(reported.Humidity ?? 0),
+    Luminance: Number(reported.Luminance ?? 0),
+    soilVoltage: Number(reported.soilVoltage ?? 0),
+    eco2: Number(reported.eco2 ?? 0),
+    tvoc: Number(reported.tvoc ?? 0),
+    pump: String(reported.pump ?? 'OFF'),
+    lightCtrl: String(reported.lightCtrl ?? 'OFF'),
+    fanCtrl: String(reported.fanCtrl ?? 'OFF'),
+    buzzer: String(reported.buzzer ?? 'OFF'),
+    tempAlarm: String(reported.tempAlarm ?? 'OFF'),
+    soilAlarm: String(reported.soilAlarm ?? 'OFF'),
+    lightMode: String(reported.lightMode ?? 'AUTO'),
+    fanMode: String(reported.fanMode ?? 'AUTO'),
+    pumpMode: String(reported.pumpMode ?? 'AUTO')
+  };
+}
 
 // 健康检查
 app.get('/', (req, res) => {
   res.send('✅ 智慧农业AI服务运行正常');
+});
+
+// 获取设备最新状态
+app.get('/status/latest', async (req, res) => {
+  try {
+    const deviceId = (process.env.HW_DEVICE_ID || '').trim();
+
+    if (!deviceId) {
+      throw new Error('缺少环境变量: HW_DEVICE_ID');
+    }
+
+    const client = createIotdaClient();
+
+    const request = new iotda.ShowDeviceShadowRequest();
+    request.deviceId = deviceId;
+
+    console.log(`📡 查询设备影子: ${deviceId}`);
+    const response = await client.showDeviceShadow(request);
+    console.log('✅ 获取设备数据成功');
+
+    const data = normalizeShadowToAppData(response);
+    res.json(data);
+  } catch (error) {
+    console.error('❌ 获取设备状态失败:', error?.message || error);
+    if (error?.response?.data) {
+      console.error('   详情:', error.response.data);
+    }
+    res.status(500).json({ 
+      error: '获取设备状态失败',
+      detail: error?.message 
+    });
+  }
 });
 
 // AI 对话接口
@@ -149,7 +143,6 @@ app.post('/chat', async (req, res) => {
     const fullPrompt = `
 你是智慧农业助手。
 要求：回答简短、通俗易懂。
-简单解释原理，给出结论。
 
 用户问题：${message}
 
@@ -171,12 +164,7 @@ app.post('/chat', async (req, res) => {
 - 温度报警: ${parsedContext.tempAlarm ?? '--'}
 - 土壤报警: ${parsedContext.soilAlarm ?? '--'}
 
-控制模式：
-- 补光模式: ${parsedContext.lightMode ?? '--'}
-- 风机模式: ${parsedContext.fanMode ?? '--'}
-- 水泵模式: ${parsedContext.pumpMode ?? '--'}
-
-请根据以上数据，给出简短、实用的建议：
+请根据以上数据给出简短、实用的建议：
 `;
 
     const completion = await openai.chat.completions.create({
@@ -193,6 +181,7 @@ app.post('/chat', async (req, res) => {
   }
 });
 
+// 启动服务
 app.listen(port, () => {
   console.log(`✅ 服务已启动: ${port}`);
 });
