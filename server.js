@@ -1,9 +1,8 @@
 import express from 'express';
 import cors from 'cors';
+import axios from 'axios';
 import dotenv from 'dotenv';
 import { OpenAI } from 'openai';
-import * as core from '@huaweicloud/huaweicloud-sdk-core';
-import * as iotda from '@huaweicloud/huaweicloud-sdk-iotda/v5/public-api.js';
 
 dotenv.config();
 
@@ -13,46 +12,60 @@ const port = process.env.PORT || 8080;
 app.use(cors());
 app.use(express.json());
 
-// ==============================
-// 通义千问客户端
-// ==============================
 const openai = new OpenAI({
   apiKey: process.env.DASHSCOPE_API_KEY,
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 });
 
-// ==============================
-// 创建华为云 IoTDA 客户端
-// ==============================
-function createIotdaClient() {
-  const ak = (process.env.HW_AK || '').trim();
-  const sk = (process.env.HW_SK || '').trim();
-  const endpoint = (process.env.HW_IOTDA_ENDPOINT || '').trim();
-  const projectId = (process.env.HW_PROJECT_ID || '').trim();
+async function getIamToken() {
+  const username = (process.env.HW_IAM_USERNAME || '').trim();
+  const password = (process.env.HW_IAM_PASSWORD || '').trim();
+  const domain = (process.env.HW_IAM_DOMAIN || '').trim();
+  const region = (process.env.HW_REGION || '').trim();
 
-  console.log('🔧 初始化 IoTDA 客户端...');
-  console.log(`   Endpoint: ${endpoint}`);
-  console.log(`   ProjectId: ${projectId}`);
-  console.log(`   AK: ${ak ? ak.substring(0, 10) + '...' : '未配置'}`);
-
-  if (!ak || !sk || !endpoint || !projectId) {
-    throw new Error('缺少环境变量: HW_AK / HW_SK / HW_IOTDA_ENDPOINT / HW_PROJECT_ID');
+  if (!username || !password || !domain || !region) {
+    throw new Error('缺少环境变量: HW_IAM_USERNAME / HW_IAM_PASSWORD / HW_IAM_DOMAIN / HW_REGION');
   }
 
-  const credentials = new core.BasicCredentials()
-    .withAk(ak)
-    .withSk(sk)
-    .withProjectId(projectId);
+  const iamUrl = 'https://iam.myhuaweicloud.com/v3/auth/tokens';
 
-  return iotda.IoTDAClient.newBuilder()
-    .withCredential(credentials)
-    .withEndpoint(endpoint)
-    .build();
+  const body = {
+    auth: {
+      identity: {
+        methods: ['password'],
+        password: {
+          user: {
+            name: username,
+            password: password,
+            domain: {
+              name: domain
+            }
+          }
+        }
+      },
+      scope: {
+        project: {
+          name: region
+        }
+      }
+    }
+  };
+
+  const response = await axios.post(iamUrl, body, {
+    headers: {
+      'Content-Type': 'application/json'
+    }
+  });
+
+  const token = response.headers['x-subject-token'];
+
+  if (!token) {
+    throw new Error('未获取到 IAM Token');
+  }
+
+  return token;
 }
 
-// ==============================
-// 解析设备影子数据
-// ==============================
 function normalizeShadowToAppData(shadowData) {
   const shadowList = shadowData?.shadow || [];
   let reported = {};
@@ -87,62 +100,44 @@ function normalizeShadowToAppData(shadowData) {
   };
 }
 
-// ==============================
-// 健康检查
-// ==============================
 app.get('/', (req, res) => {
   res.send('✅ 智慧农业AI服务运行正常');
 });
 
-// ==============================
-// 获取设备最新状态
-// ==============================
 app.get('/status/latest', async (req, res) => {
   try {
+    const projectId = (process.env.HW_PROJECT_ID || '').trim();
     const deviceId = (process.env.HW_DEVICE_ID || '').trim();
     const instanceId = (process.env.HW_INSTANCE_ID || '').trim();
+    const endpoint = (process.env.HW_IOTDA_ENDPOINT || '').trim();
 
-    if (!deviceId) {
-      throw new Error('缺少环境变量: HW_DEVICE_ID');
+    if (!projectId || !deviceId || !instanceId || !endpoint) {
+      throw new Error('缺少环境变量: HW_PROJECT_ID / HW_DEVICE_ID / HW_INSTANCE_ID / HW_IOTDA_ENDPOINT');
     }
 
-    if (!instanceId) {
-      throw new Error('缺少环境变量: HW_INSTANCE_ID');
-    }
+    const token = await getIamToken();
 
-    const client = createIotdaClient();
+    const url = `${endpoint}/v5/iot/${projectId}/devices/${deviceId}/shadow`;
 
-    const request = new iotda.ShowDeviceShadowRequest();
-    request.deviceId = deviceId;
-    request.instanceId = instanceId;
+    const response = await axios.get(url, {
+      headers: {
+        'X-Auth-Token': token,
+        'Instance-Id': instanceId,
+        'Content-Type': 'application/json'
+      }
+    });
 
-    console.log(`📡 查询设备影子: ${deviceId}`);
-    console.log(`   InstanceId: ${instanceId}`);
-
-    const response = await client.showDeviceShadow(request);
-
-    console.log('✅ 获取设备数据成功');
-    console.log('📦 原始影子数据:', JSON.stringify(response, null, 2));
-
-    const data = normalizeShadowToAppData(response);
+    const data = normalizeShadowToAppData(response.data);
     res.json(data);
   } catch (error) {
-    console.error('❌ 获取设备状态失败:', error?.message || error);
-
-    if (error?.response?.data) {
-      console.error('   详情:', JSON.stringify(error.response.data, null, 2));
-    }
-
+    console.error('❌ 获取设备状态失败:', error?.response?.data || error?.message || error);
     res.status(500).json({
       error: '获取设备状态失败',
-      detail: error?.message || 'unknown error'
+      detail: error?.response?.data || error?.message || 'unknown error'
     });
   }
 });
 
-// ==============================
-// AI 对话接口
-// ==============================
 app.post('/chat', async (req, res) => {
   try {
     const { message, context } = req.body || {};
@@ -206,9 +201,6 @@ app.post('/chat', async (req, res) => {
   }
 });
 
-// ==============================
-// 启动服务
-// ==============================
 app.listen(port, () => {
   console.log(`✅ 服务已启动: ${port}`);
 });
