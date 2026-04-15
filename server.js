@@ -13,13 +13,17 @@ const port = process.env.PORT || 8080;
 app.use(cors());
 app.use(express.json());
 
+// ==============================
 // 通义千问客户端
+// ==============================
 const openai = new OpenAI({
   apiKey: process.env.DASHSCOPE_API_KEY,
   baseURL: 'https://dashscope.aliyuncs.com/compatible-mode/v1'
 });
 
+// ==============================
 // 创建华为云 IoTDA 客户端
+// ==============================
 function createIotdaClient() {
   const ak = (process.env.HW_AK || '').trim();
   const sk = (process.env.HW_SK || '').trim();
@@ -29,7 +33,7 @@ function createIotdaClient() {
   console.log('🔧 初始化 IoTDA 客户端...');
   console.log(`   Endpoint: ${endpoint}`);
   console.log(`   ProjectId: ${projectId}`);
-  console.log(`   AK: ${ak.substring(0, 10)}...`);
+  console.log(`   AK: ${ak ? ak.substring(0, 10) + '...' : '未配置'}`);
 
   if (!ak || !sk || !endpoint || !projectId) {
     throw new Error('缺少环境变量: HW_AK / HW_SK / HW_IOTDA_ENDPOINT / HW_PROJECT_ID');
@@ -46,7 +50,9 @@ function createIotdaClient() {
     .build();
 }
 
-// 解析设备数据
+// ==============================
+// 解析设备影子数据
+// ==============================
 function normalizeShadowToAppData(shadowData) {
   const shadowList = shadowData?.shadow || [];
   let reported = {};
@@ -81,44 +87,62 @@ function normalizeShadowToAppData(shadowData) {
   };
 }
 
+// ==============================
 // 健康检查
+// ==============================
 app.get('/', (req, res) => {
   res.send('✅ 智慧农业AI服务运行正常');
 });
 
+// ==============================
 // 获取设备最新状态
+// ==============================
 app.get('/status/latest', async (req, res) => {
   try {
     const deviceId = (process.env.HW_DEVICE_ID || '').trim();
+    const instanceId = (process.env.HW_INSTANCE_ID || '').trim();
 
     if (!deviceId) {
       throw new Error('缺少环境变量: HW_DEVICE_ID');
+    }
+
+    if (!instanceId) {
+      throw new Error('缺少环境变量: HW_INSTANCE_ID');
     }
 
     const client = createIotdaClient();
 
     const request = new iotda.ShowDeviceShadowRequest();
     request.deviceId = deviceId;
+    request.instanceId = instanceId;
 
     console.log(`📡 查询设备影子: ${deviceId}`);
+    console.log(`   InstanceId: ${instanceId}`);
+
     const response = await client.showDeviceShadow(request);
+
     console.log('✅ 获取设备数据成功');
+    console.log('📦 原始影子数据:', JSON.stringify(response, null, 2));
 
     const data = normalizeShadowToAppData(response);
     res.json(data);
   } catch (error) {
     console.error('❌ 获取设备状态失败:', error?.message || error);
+
     if (error?.response?.data) {
-      console.error('   详情:', error.response.data);
+      console.error('   详情:', JSON.stringify(error.response.data, null, 2));
     }
-    res.status(500).json({ 
+
+    res.status(500).json({
       error: '获取设备状态失败',
-      detail: error?.message 
+      detail: error?.message || 'unknown error'
     });
   }
 });
 
+// ==============================
 // AI 对话接口
+// ==============================
 app.post('/chat', async (req, res) => {
   try {
     const { message, context } = req.body || {};
@@ -128,6 +152,7 @@ app.post('/chat', async (req, res) => {
     }
 
     let parsedContext = {};
+
     if (context) {
       if (typeof context === 'string') {
         try {
@@ -142,7 +167,7 @@ app.post('/chat', async (req, res) => {
 
     const fullPrompt = `
 你是智慧农业助手。
-要求：回答简短、通俗易懂。
+要求：回答简短、通俗易懂，适合手机展示。
 
 用户问题：${message}
 
@@ -181,7 +206,9 @@ app.post('/chat', async (req, res) => {
   }
 });
 
+// ==============================
 // 启动服务
+// ==============================
 app.listen(port, () => {
   console.log(`✅ 服务已启动: ${port}`);
 });
